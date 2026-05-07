@@ -1,0 +1,14 @@
+{
+  "name": "vocalcord-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-client monorepo for Vocal Cord (AGPL-3.0)",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VocalCord/vocalcord-client.git"
+  },
+  "workspaces": [
+    "clients/*"
+  ]
+}

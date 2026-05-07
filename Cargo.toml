@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/push-core",
+    "clients/openclaw-plugin/napi",
+    # Future: "clients/desktop/src-tauri" once the Tauri app is scaffolded.
+]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-only"
+repository = "https://github.com/VocalCord/vocalcord-client"
+
+[workspace.dependencies]
+# Shared crates (path-deps).
+push-core = { path = "crates/push-core" }
+
+# Common third-party crates pinned at the workspace level so every
+# client picks up the same major versions.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+axum = { version = "0.7" }
+hyper = { version = "1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+lru = "0.12"
+napi = { version = "2", features = ["async"] }
+napi-derive = "2"
