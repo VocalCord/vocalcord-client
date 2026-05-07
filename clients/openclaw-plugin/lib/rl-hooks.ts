@@ -37,16 +37,14 @@ export function makeAfterToolCall(gate: RateLimitGate) {
 }
 
 function parseRetryAfter(event: ToolCallEvent): number | null {
-  const code = event.error?.code;
+  // Server-side contract (see crates/vocalcord-mcp-server/src/handler.rs):
+  // a rate-limit-exceeded error surfaces `retryAfterSec` in
+  // `error.data`. Detection is purely by presence of that field —
+  // robust to JSON-RPC code remapping or message-format tweaks.
   const data = event.error?.data;
-  // Server-side contract (see vocalcord-lambda-mcp): 429 surfaces
-  // as { code: 429 (or "RateLimited"), data: { retryAfterSec } }.
-  const looksLike429 =
-    code === 429 || code === '429' || code === 'RateLimited' || code === 'rate_limited';
-  if (!looksLike429) return null;
   if (data && typeof data === 'object') {
     const v = (data as Record<string, unknown>).retryAfterSec;
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
   }
   return null;
 }
