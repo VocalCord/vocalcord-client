@@ -9,7 +9,7 @@
 
 import { VocalCordClient, type MessageEvent } from '@vocalcord/sdk';
 
-import { wake } from './binding.js';
+import { wake } from '../index.js';
 import type { OpenclawApi, PluginConfig } from './types.js';
 
 export interface WsBridgeHandle {

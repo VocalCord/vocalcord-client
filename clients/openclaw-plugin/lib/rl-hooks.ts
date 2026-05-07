@@ -8,7 +8,7 @@
 // the call with a synthetic prose result. NO in-process retry, NO
 // cron mutation.
 
-import type { RateLimitGate } from './binding.js';
+import type { RateLimitGate } from '../index.js';
 import type { HookHandlerResult, ToolCallEvent } from './types.js';
 
 const TARGET_TOOL = 'vocalcord.GetMessages';

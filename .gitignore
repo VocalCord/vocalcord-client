@@ -8,3 +8,8 @@ node_modules/
 !.env.example
 dist/
 build/
+
+# napi-rs auto-generates these into the package root on build —
+# they ship in published artifacts but aren't committed.
+clients/*/index.js
+clients/*/index.d.ts

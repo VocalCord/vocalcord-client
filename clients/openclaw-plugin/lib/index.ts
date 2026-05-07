@@ -11,7 +11,7 @@
 //
 // Lifecycle (gateway_stop): close all handles.
 
-import { RateLimitGate } from './binding.js';
+import { RateLimitGate } from '../index.js';
 import { ensureCron } from './cron-bootstrap.js';
 import { ensureMcpServer } from './mcp-config.js';
 import { makeAfterToolCall, makeBeforeToolCall } from './rl-hooks.js';

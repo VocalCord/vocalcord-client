@@ -16,7 +16,7 @@
 
 import { webcrypto } from 'node:crypto';
 
-import { Receiver, type ReceiverHandle } from './binding.js';
+import { Receiver } from '../index.js';
 import type { PluginConfig } from './types.js';
 
 interface WebhookConfigureResponse {
@@ -25,7 +25,7 @@ interface WebhookConfigureResponse {
 }
 
 export interface WebhookSetupResult {
-  handle: ReceiverHandle;
+  handle: Receiver;
 }
 
 function genSecret(): string {
@@ -49,7 +49,7 @@ export async function trySetupWebhook(
 
   // 1. Bind the receiver FIRST — vocalcord's verification ping
   //    arrives before the configure call returns.
-  let handle: ReceiverHandle;
+  let handle: Receiver;
   try {
     handle = await Receiver.start({
       bindAddr: `0.0.0.0:${port}`,
