@@ -2,8 +2,9 @@
 resolver = "2"
 members = [
     "crates/push-core",
-    "clients/openclaw-plugin/napi",
-    # Future: "clients/desktop/src-tauri" once the Tauri app is scaffolded.
+    # Joined as it lands:
+    # "clients/openclaw-plugin/napi",
+    # "clients/desktop/src-tauri",
 ]
 
 [workspace.package]
