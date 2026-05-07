@@ -1,0 +1,48 @@
+{
+  "id": "vocalcord-openclaw-plugin",
+  "name": "Vocal Cord",
+  "description": "Wires Vocal Cord's MCP server into OpenClaw, sets up real-time inbound (webhook with WebSocket fallback), and runs a 6-hourly pull-sync.",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "required": ["apiKey", "hookToken"],
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Vocal Cord account UUID (acts as bearer token)."
+      },
+      "apiBase": {
+        "type": "string",
+        "default": "https://api.vocalcord.io",
+        "description": "Vocal Cord REST + MCP base URL."
+      },
+      "wsBase": {
+        "type": "string",
+        "description": "Vocal Cord WebSocket base URL (defaults to apiBase with wss://)."
+      },
+      "publicUrl": {
+        "type": "string",
+        "description": "Public URL of THIS gateway (e.g. https://my-host.tailnet.ts.net). When set, the plugin asks vocalcord to deliver webhooks here. When omitted, vocalcord will fall back to using the source IP of the configure request and try to reach back; if that fails, the plugin falls back to a WebSocket subscription instead."
+      },
+      "webhookPort": {
+        "type": "number",
+        "default": 18790,
+        "description": "Port to bind the local webhook receiver on."
+      },
+      "webhookPath": {
+        "type": "string",
+        "default": "/vocalcord/inbound",
+        "description": "Path the local webhook receiver serves."
+      },
+      "gatewayBaseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:18789",
+        "description": "OpenClaw Gateway base URL — the receiver POSTs to <gatewayBaseUrl>/hooks/wake."
+      },
+      "hookToken": {
+        "type": "string",
+        "description": "OpenClaw hooks bearer token (the value of `hooks.token` in the gateway config)."
+      }
+    }
+  }
+}

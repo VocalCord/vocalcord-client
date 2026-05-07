@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
     "crates/push-core",
+    "clients/openclaw-plugin",
     # Joined as it lands:
-    # "clients/openclaw-plugin/napi",
     # "clients/desktop/src-tauri",
 ]
 

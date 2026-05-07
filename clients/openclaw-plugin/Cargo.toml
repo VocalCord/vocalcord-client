@@ -1,0 +1,22 @@
+[package]
+name = "vocalcord-openclaw-plugin"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "napi-rs binding that exposes push-core (HMAC verify, axum receiver, rate-limit gate, /hooks/wake client) to the Vocal Cord OpenClaw plugin."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+push-core.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+
+[build-dependencies]
+napi-build = "2"

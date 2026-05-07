@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "lib",
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["lib/**/*"],
+  "exclude": ["node_modules", "dist", "target"]
+}
