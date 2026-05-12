@@ -1,0 +1,52 @@
+[package]
+name = "vocalcord-desktop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vocal Cord desktop — Tauri 2 system-tray app that runs a local coding agent in response to inbound messages."
+
+[lib]
+name = "vocalcord_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Vocal Cord shared crates (path-deps via workspace).
+push-core.workspace = true
+vocalcord-ws-client.workspace = true
+vocalcord-mcp-client.workspace = true
+
+# Tauri 2 + plugins.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+# Core async + serde.
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = "0.1"
+once_cell = "1"
+time = { version = "0.3", features = ["serde-human-readable", "macros"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+reqwest = { workspace = true }
+dirs = "5"
+base64 = "0.22"
+
+# Coding agent runtime (pulled as a git dep until lr-coding-agents
+# publishes to crates.io).
+lr-coding-agents = { git = "https://github.com/LocalRouter/LocalRouter.git", branch = "master" }
+lr-config = { git = "https://github.com/LocalRouter/LocalRouter.git", branch = "master" }
+lr-types = { git = "https://github.com/LocalRouter/LocalRouter.git", branch = "master" }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

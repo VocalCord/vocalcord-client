@@ -13,3 +13,7 @@ build/
 # they ship in published artifacts but aren't committed.
 clients/*/index.js
 clients/*/index.d.ts
+
+# Tauri build artifacts.
+clients/desktop/src-tauri/gen/
+clients/desktop/src-tauri/target/

@@ -5,8 +5,7 @@ members = [
     "crates/vocalcord-ws-client",
     "crates/vocalcord-mcp-client",
     "clients/openclaw-plugin",
-    # Joined as it lands:
-    # "clients/desktop/src-tauri",
+    "clients/desktop/src-tauri",
 ]
 
 [workspace.package]
