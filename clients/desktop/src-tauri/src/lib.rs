@@ -46,6 +46,9 @@ pub fn run() {
         .init();
 
     let shared = AppState::new_shared();
+    // Settings get reloaded from disk inside setup() once the store
+    // plugin is initialised; default value here is just the
+    // placeholder during plugin bring-up.
     let settings = Arc::new(RwLock::new(Settings::default()));
 
     tauri::Builder::default()
@@ -61,6 +64,13 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tray::build(&handle)?;
                 tray::set_variant(&handle, tray::TrayVariant::Disconnected);
+
+                // Reload persisted settings now that the store
+                // plugin is up.
+                {
+                    let loaded = settings::load(&handle);
+                    *settings.write() = loaded;
+                }
 
                 // The window is `visible: false` in tauri.conf.json;
                 // we only show it on tray click. This keeps the dock

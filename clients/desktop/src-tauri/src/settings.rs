@@ -104,3 +104,55 @@ impl Settings {
         !self.api_key.trim().is_empty()
     }
 }
+
+/// Filename of the JSON store under the app data directory. The
+/// file isn't user-facing; the path is opaque (typically
+/// `~/Library/Application Support/io.vocalcord.desktop/settings.bin`
+/// on macOS).
+pub const STORE_FILE: &str = "settings.bin";
+pub const STORE_KEY: &str = "settings";
+
+/// Read persisted settings from disk, returning the default value
+/// when the file is missing, the key is absent, or the payload
+/// fails to deserialise (forward-compat schema drift).
+pub fn load<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Settings {
+    use tauri_plugin_store::StoreExt;
+    match app.store(STORE_FILE) {
+        Ok(store) => match store.get(STORE_KEY) {
+            Some(value) => match serde_json::from_value::<Settings>(value) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "settings deserialize failed; using defaults");
+                    Settings::default()
+                }
+            },
+            None => Settings::default(),
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "settings store open failed; using defaults");
+            Settings::default()
+        }
+    }
+}
+
+/// Persist settings to disk. Best-effort — logs on failure, never
+/// returns an error so the in-memory state stays updated either way.
+pub fn save<R: tauri::Runtime>(app: &tauri::AppHandle<R>, settings: &Settings) {
+    use tauri_plugin_store::StoreExt;
+    let store = match app.store(STORE_FILE) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "settings store open failed; not persisting");
+            return;
+        }
+    };
+    match serde_json::to_value(settings) {
+        Ok(v) => {
+            store.set(STORE_KEY, v);
+            if let Err(e) = store.save() {
+                tracing::warn!(error = %e, "settings store save failed");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "settings serialize failed"),
+    }
+}

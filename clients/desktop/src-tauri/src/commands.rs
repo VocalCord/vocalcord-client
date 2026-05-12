@@ -23,10 +23,13 @@ pub fn update_settings(
 ) -> Result<(), String> {
     {
         let mut g = settings.write();
-        *g = next;
+        *g = next.clone();
     }
-    // Front-end persists via tauri-plugin-store; emit so background
-    // workers know to soft-restart with the new config.
+    // Persist to disk + notify background workers. Background
+    // soft-restart on settings-changed is a follow-up; today the
+    // user restarts the app to pick up changes to apiKey /
+    // publicUrl / etc.
+    crate::settings::save(&app, &next);
     let _ = tauri::Emitter::emit(&app, "settings-changed", ());
     Ok(())
 }
