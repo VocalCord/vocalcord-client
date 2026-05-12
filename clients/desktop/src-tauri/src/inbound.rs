@@ -10,14 +10,27 @@ use vocalcord_ws_client::{Frame, WsClient, WsOptions};
 
 use crate::settings::Settings;
 
+/// Events the runtime loop consumes. Message goes through the
+/// approval router; connection events update tray + UI state but
+/// don't trigger agent work.
+#[derive(Debug, Clone)]
+pub enum InboundEvent {
+    Message(InboundMessage),
+    /// WS handshake completed (Welcome frame received).
+    Connected,
+    /// Server-initiated close, transport error, or stream end.
+    /// The WS client auto-reconnects internally.
+    Disconnected(String),
+}
+
 /// Spawn the WS subscriber and (if `publicUrl` is set) the local
 /// webhook receiver, merging both into the returned mpsc receiver.
 ///
 /// Returns the receiver plus a list of shutdown handles the caller
 /// invokes on settings-change or app exit.
-pub async fn start(settings: &Settings) -> (mpsc::Receiver<InboundMessage>, Vec<Shutdown>) {
+pub async fn start(settings: &Settings) -> (mpsc::Receiver<InboundEvent>, Vec<Shutdown>) {
     let dedup = Dedup::default();
-    let (out_tx, out_rx) = mpsc::channel::<InboundMessage>(64);
+    let (out_tx, out_rx) = mpsc::channel::<InboundEvent>(64);
     let mut shutdowns: Vec<Shutdown> = Vec::new();
 
     // WS subscriber — always running.
@@ -39,13 +52,23 @@ pub async fn start(settings: &Settings) -> (mpsc::Receiver<InboundMessage>, Vec<
                             match frame {
                                 Some(Frame::Message(m)) => {
                                     if dedup_for_ws.check_and_record(&m.id) { continue; }
-                                    if tx.send(m).await.is_err() { break; }
+                                    if tx.send(InboundEvent::Message(m)).await.is_err() { break; }
+                                }
+                                Some(Frame::Welcome) => {
+                                    let _ = tx.send(InboundEvent::Connected).await;
+                                }
+                                Some(Frame::Closing) => {
+                                    let _ = tx.send(InboundEvent::Disconnected("server closing".into())).await;
                                 }
                                 Some(Frame::ServerError(e)) => {
                                     tracing::warn!(error = %e, "ws server error");
+                                    let _ = tx.send(InboundEvent::Disconnected(e)).await;
                                 }
-                                Some(_) => { /* welcome / pong / closing / unknown */ }
-                                None => break,
+                                Some(_) => { /* pong / unknown */ }
+                                None => {
+                                    let _ = tx.send(InboundEvent::Disconnected("stream ended".into())).await;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -128,7 +151,7 @@ fn generate_secret() -> String {
 }
 
 struct MpscForwarder {
-    tx: mpsc::Sender<InboundMessage>,
+    tx: mpsc::Sender<InboundEvent>,
     dedup: Dedup,
 }
 
@@ -144,7 +167,7 @@ impl PcForwarder for MpscForwarder {
                 return Ok(());
             }
             self.tx
-                .send(msg)
+                .send(InboundEvent::Message(msg))
                 .await
                 .map_err(|_| "downstream receiver closed".to_string())
         })

@@ -21,6 +21,7 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter};
 use workspace_utils::approvals::{ApprovalStatus, QuestionAnswer, QuestionStatus};
 
+use crate::outbound;
 use crate::settings::{AgentType, ApprovalMode, PermissionMode, Settings};
 use crate::state::{AgentStatus, SharedState};
 use crate::tray::{self, variant_for};
@@ -69,8 +70,23 @@ pub struct AgentRunner {
 
 impl AgentRunner {
     pub fn new(working_directory: PathBuf, manager: Arc<dyn ManagerHandle>) -> Self {
+        Self::new_with_link(
+            working_directory,
+            manager,
+            Arc::new(Mutex::new(SessionLink::default())),
+        )
+    }
+
+    /// Same as [`Self::new`] but reuses a caller-provided
+    /// `SessionLink`. Used in `lib.rs::setup` so the status watcher
+    /// and the `AgentRunner` share the same link Arc.
+    pub fn new_with_link(
+        working_directory: PathBuf,
+        manager: Arc<dyn ManagerHandle>,
+        link: Arc<Mutex<SessionLink>>,
+    ) -> Self {
         Self {
-            link: Arc::new(Mutex::new(SessionLink::default())),
+            link,
             working_directory,
             manager,
         }
@@ -128,7 +144,19 @@ impl LrManagerHandle {
     /// `agent-status` events. Constructed from `lib.rs::setup()`
     /// where the `AppHandle` (and therefore the emitter) is
     /// available.
-    pub fn build(app: AppHandle, state: SharedState, settings: &Settings) -> Arc<Self> {
+    ///
+    /// `settings_arc` is the shared `Arc<RwLock<Settings>>` so the
+    /// status watcher can read up-to-date apiBase / apiKey when it
+    /// sends the auto-reply on session Done. `link` lets the watcher
+    /// look up which inbound message originated the session so the
+    /// reply threads correctly.
+    pub fn build(
+        app: AppHandle,
+        state: SharedState,
+        settings: &Settings,
+        settings_arc: Arc<parking_lot::RwLock<Settings>>,
+        link: Arc<Mutex<SessionLink>>,
+    ) -> Arc<Self> {
         let trigger: Arc<dyn PopupTrigger> = Arc::new(TauriPopupTrigger {
             app: app.clone(),
             state: state.clone(),
@@ -162,8 +190,9 @@ impl LrManagerHandle {
         });
 
         // Spawn status watcher so the UI + tray reflect Running →
-        // Done/Error transitions the manager publishes.
-        spawn_status_watcher(manager, app, state);
+        // Done/Error transitions the manager publishes. The watcher
+        // also drives the auto-reply on Done.
+        spawn_status_watcher(manager, app, state, settings_arc, link);
 
         handle
     }
@@ -326,11 +355,15 @@ fn describe(s: &AgentStatus) -> String {
 
 /// Watch the manager's broadcast channel; on every change tick,
 /// query the current session (if we have one) and emit a transition
-/// for the UI + tray.
+/// for the UI + tray. When a session transitions to Done/Error,
+/// auto-reply the trailing output to the originating channel via
+/// `outbound::send_reply`.
 fn spawn_status_watcher(
     manager: Arc<CodingAgentManager>,
     app: AppHandle,
     state: SharedState,
+    settings_arc: Arc<parking_lot::RwLock<Settings>>,
+    link: Arc<Mutex<SessionLink>>,
 ) {
     tokio::spawn(async move {
         let mut rx = manager.subscribe_changes();
@@ -338,35 +371,101 @@ fn spawn_status_watcher(
             if rx.recv().await.is_err() {
                 break;
             }
-            let sid_opt = match state.read().agent.clone() {
+            // Determine the session id we're tracking — current
+            // session in state if Running/Waiting, else whatever the
+            // link recorded (so we still catch the terminal tick
+            // that fires *after* state has already been transitioned
+            // by an earlier event).
+            let cur = state.read().agent.clone();
+            let sid_opt = match &cur {
                 AgentStatus::Running { session_id } if !session_id.is_empty() => {
-                    Some(session_id)
+                    Some(session_id.clone())
                 }
+                AgentStatus::WaitingForApproval { .. }
+                | AgentStatus::WaitingForAnswer { .. } => link.lock().current_session_id.clone(),
                 _ => None,
             };
             let Some(sid) = sid_opt else { continue };
-            let Ok(resp) = manager.status(&sid, CLIENT_ID, Some(20)).await else {
+            let Ok(resp) = manager.status(&sid, CLIENT_ID, Some(120)).await else {
                 continue;
             };
-            // Don't override a pending approval/question state with
-            // a stale "Active" tick — the PopupTrigger callback is
-            // the source of truth for WaitingFor* states.
-            let cur = state.read().agent.clone();
             let new = match resp.status {
                 SessionStatus::Active => match cur {
                     AgentStatus::WaitingForApproval { .. }
                     | AgentStatus::WaitingForAnswer { .. } => cur,
-                    _ => AgentStatus::Running { session_id: sid },
+                    _ => AgentStatus::Running { session_id: sid.clone() },
                 },
                 SessionStatus::Done => AgentStatus::Stopped,
                 SessionStatus::Error => AgentStatus::Error {
-                    message: "session error".into(),
+                    message: resp
+                        .result
+                        .clone()
+                        .unwrap_or_else(|| "session error".into()),
                 },
                 SessionStatus::Interrupted => AgentStatus::Stopped,
             };
-            apply_agent_transition(&app, &state, new);
+            apply_agent_transition(&app, &state, new.clone());
+
+            // Auto-reply on Done / Error.
+            if matches!(resp.status, SessionStatus::Done | SessionStatus::Error) {
+                let body = build_reply_body(&resp);
+                let settings_now = settings_arc.read().clone();
+                let inbound_id = link.lock().originating_inbound_id.clone();
+                if let (Some(inbound_id), true) =
+                    (inbound_id, settings_now.is_configured() && !body.is_empty())
+                {
+                    let trimmed = outbound::truncate_for_reply(
+                        &body,
+                        settings_now.reply_truncate_chars,
+                    );
+                    if let Err(e) =
+                        outbound::send_reply(&settings_now, &inbound_id, trimmed).await
+                    {
+                        tracing::warn!(error = ?e, "auto-reply send_message failed");
+                        state
+                            .write()
+                            .log(format!("auto-reply failed: {e}"));
+                    } else {
+                        state.write().log("auto-reply sent");
+                    }
+                }
+                // Clear the session link so a follow-up message
+                // starts fresh rather than trying to .say() on a
+                // dead session id.
+                {
+                    let mut g = link.lock();
+                    g.current_session_id = None;
+                    g.originating_inbound_id = None;
+                }
+            }
         }
     });
+}
+
+/// Build the reply body from a StatusResponse. Prefers the
+/// agent's explicit `result` (final assistant text), falls back to
+/// the last few output lines so the user always gets *something*
+/// useful even for agents that don't emit a structured result.
+fn build_reply_body(resp: &lr_coding_agents::types::StatusResponse) -> String {
+    if let Some(r) = &resp.result {
+        if !r.trim().is_empty() {
+            return r.clone();
+        }
+    }
+    // Take the trailing chunk of recent_output, dropping empties
+    // and anything that looks like an executor log line.
+    let lines: Vec<&str> = resp
+        .recent_output
+        .iter()
+        .map(|s| s.as_str())
+        .rev()
+        .take_while(|s| !s.is_empty())
+        .collect();
+    let mut owned: Vec<String> = lines.into_iter().rev().map(String::from).collect();
+    if owned.is_empty() {
+        owned = resp.recent_output.iter().cloned().collect();
+    }
+    owned.join("\n")
 }
 
 // ---------- settings → lr_config mappings ----------

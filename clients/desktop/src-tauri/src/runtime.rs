@@ -12,26 +12,55 @@ use tokio::sync::mpsc;
 
 use crate::agent_runner::AgentRunner;
 use crate::approval_router::{decide, Action};
+use crate::inbound::InboundEvent;
 use crate::outbound;
 use crate::settings::Settings;
-use crate::state::{AgentStatus, InboxItem, SharedState};
+use crate::state::{AgentStatus, ConnectionStatus, InboxItem, SharedState};
 use crate::tray::{self, variant_for};
 
 /// Kick off the runtime — spawns a background task that drives the
 /// loop until the channel closes (i.e. settings change / app exit).
 pub fn spawn(
     app: AppHandle,
-    mut rx: mpsc::Receiver<InboundMessage>,
+    mut rx: mpsc::Receiver<InboundEvent>,
     state: SharedState,
     settings: Arc<RwLock<Settings>>,
     agent: Arc<AgentRunner>,
 ) {
     tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            handle_inbound(&app, msg, &state, &settings, &agent).await;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                InboundEvent::Message(m) => {
+                    handle_inbound(&app, m, &state, &settings, &agent).await;
+                }
+                InboundEvent::Connected => {
+                    transition_connection(&app, &state, ConnectionStatus::Connected);
+                }
+                InboundEvent::Disconnected(reason) => {
+                    {
+                        let mut g = state.write();
+                        g.log(format!("ws disconnected: {reason}"));
+                    }
+                    transition_connection(&app, &state, ConnectionStatus::Reconnecting);
+                }
+            }
         }
         tracing::info!("inbound stream closed; runtime exiting");
     });
+}
+
+fn transition_connection(app: &AppHandle, state: &SharedState, next: ConnectionStatus) {
+    {
+        let mut g = state.write();
+        g.connection = next.clone();
+        g.log(format!("connection → {:?}", next));
+    }
+    let (conn, agent) = {
+        let g = state.read();
+        (g.connection.clone(), g.agent.clone())
+    };
+    tray::set_variant(app, variant_for(&conn, &agent));
+    emit_snapshot(app, state);
 }
 
 async fn handle_inbound(

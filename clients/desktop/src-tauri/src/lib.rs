@@ -70,22 +70,48 @@ pub fn run() {
 
                 // Construct the agent runner here — `LrManagerHandle::build`
                 // needs the AppHandle so its PopupTrigger can emit
-                // Tauri events.
+                // Tauri events. AgentRunner and the status watcher
+                // share one SessionLink Arc so auto-reply on Done
+                // knows which inbound to thread its SendMessage off.
                 let s = settings.read().clone();
-                let manager: Arc<dyn ManagerHandle> =
-                    LrManagerHandle::build(handle.clone(), shared.clone(), &s);
-                let agent = Arc::new(AgentRunner::new(
+                let link = Arc::new(parking_lot::Mutex::new(
+                    agent_runner::SessionLink::default(),
+                ));
+                let manager: Arc<dyn ManagerHandle> = LrManagerHandle::build(
+                    handle.clone(),
+                    shared.clone(),
+                    &s,
+                    settings.clone(),
+                    link.clone(),
+                );
+                let agent = Arc::new(AgentRunner::new_with_link(
                     s.working_directory.clone(),
                     manager,
+                    link,
                 ));
                 handle.manage::<Arc<AgentRunner>>(agent.clone());
 
                 // Kick off the inbound runtime if the user has an
                 // apiKey configured. Otherwise the Status page shows
                 // "Paused" until they save Settings.
+                //
+                // The Vec<Shutdown> returned by inbound::start MUST
+                // outlive the runtime — its Drop impls signal each
+                // background task to exit, so dropping it
+                // immediately would tear down inbound on the spot.
+                // We stash it in Tauri state so it lives until the
+                // app shuts down (or settings reload, which can
+                // replace it cleanly).
+                let shutdowns: Arc<parking_lot::Mutex<Vec<inbound::Shutdown>>> =
+                    Arc::new(parking_lot::Mutex::new(Vec::new()));
+                handle.manage::<Arc<parking_lot::Mutex<Vec<inbound::Shutdown>>>>(
+                    shutdowns.clone(),
+                );
                 if s.is_configured() {
+                    let shutdowns = shutdowns.clone();
                     tauri::async_runtime::spawn(async move {
-                        let (rx, _shutdowns) = inbound::start(&s).await;
+                        let (rx, sh) = inbound::start(&s).await;
+                        *shutdowns.lock() = sh;
                         runtime::spawn(handle, rx, shared, settings, agent);
                     });
                 }
