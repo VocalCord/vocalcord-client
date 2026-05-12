@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/push-core",
+    "crates/vocalcord-ws-client",
+    "crates/vocalcord-mcp-client",
     "clients/openclaw-plugin",
     # Joined as it lands:
     # "clients/desktop/src-tauri",
@@ -15,10 +17,14 @@ repository = "https://github.com/VocalCord/vocalcord-client"
 [workspace.dependencies]
 # Shared crates (path-deps).
 push-core = { path = "crates/push-core" }
+vocalcord-ws-client = { path = "crates/vocalcord-ws-client" }
+vocalcord-mcp-client = { path = "crates/vocalcord-mcp-client" }
 
 # Common third-party crates pinned at the workspace level so every
 # client picks up the same major versions.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+futures-util = "0.3"
 axum = { version = "0.7" }
 hyper = { version = "1" }
 serde = { version = "1", features = ["derive"] }
@@ -32,5 +38,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
 lru = "0.12"
+url = "2"
 napi = { version = "2", features = ["async"] }
 napi-derive = "2"
