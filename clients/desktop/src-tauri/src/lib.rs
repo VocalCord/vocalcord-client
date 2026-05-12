@@ -21,16 +21,18 @@ pub mod outbound;
 pub mod runtime;
 pub mod settings;
 pub mod state;
+pub mod supervisor;
 pub mod tray;
 
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tauri::Manager;
+use tauri::{Listener, Manager};
 
 use crate::agent_runner::{AgentRunner, LrManagerHandle, ManagerHandle};
 use crate::settings::Settings;
 use crate::state::AppState;
+use crate::supervisor::Supervisor;
 
 /// Tauri app entrypoint. Called from `main.rs` for binary builds and
 /// from mobile / test harnesses for non-binary builds.
@@ -101,28 +103,70 @@ pub fn run() {
                 ));
                 handle.manage::<Arc<AgentRunner>>(agent.clone());
 
-                // Kick off the inbound runtime if the user has an
-                // apiKey configured. Otherwise the Status page shows
-                // "Paused" until they save Settings.
-                //
-                // The Vec<Shutdown> returned by inbound::start MUST
-                // outlive the runtime — its Drop impls signal each
-                // background task to exit, so dropping it
-                // immediately would tear down inbound on the spot.
-                // We stash it in Tauri state so it lives until the
-                // app shuts down (or settings reload, which can
-                // replace it cleanly).
-                let shutdowns: Arc<parking_lot::Mutex<Vec<inbound::Shutdown>>> =
-                    Arc::new(parking_lot::Mutex::new(Vec::new()));
-                handle.manage::<Arc<parking_lot::Mutex<Vec<inbound::Shutdown>>>>(
-                    shutdowns.clone(),
+                // The supervisor owns the spawn lifecycle of inbound +
+                // runtime so the tray actions and settings-changed
+                // listener can pause / resume / reload cleanly.
+                let supervisor = Supervisor::new(
+                    handle.clone(),
+                    shared.clone(),
+                    settings.clone(),
+                    agent.clone(),
                 );
-                if s.is_configured() {
-                    let shutdowns = shutdowns.clone();
+                handle.manage::<Arc<Supervisor>>(supervisor.clone());
+
+                // Boot inbound + runtime now (no-op if api_key empty).
+                {
+                    let sup = supervisor.clone();
                     tauri::async_runtime::spawn(async move {
-                        let (rx, sh) = inbound::start(&s).await;
-                        *shutdowns.lock() = sh;
-                        runtime::spawn(handle, rx, shared, settings, agent);
+                        sup.start().await;
+                    });
+                }
+
+                // Tray menu emits `tray-action` with "toggle-agent" or
+                // "toggle-inbound". The runtime listens for these and
+                // routes through the supervisor / agent runner.
+                {
+                    let sup = supervisor.clone();
+                    let agent = agent.clone();
+                    handle.listen("tray-action", move |ev| {
+                        let payload = ev.payload();
+                        let action = payload.trim_matches('"').to_string();
+                        let sup = sup.clone();
+                        let agent = agent.clone();
+                        tauri::async_runtime::spawn(async move {
+                            match action.as_str() {
+                                "toggle-inbound" => {
+                                    if sup.is_running().await {
+                                        sup.pause().await;
+                                    } else {
+                                        sup.start().await;
+                                    }
+                                }
+                                "toggle-agent" => {
+                                    // For now this just interrupts
+                                    // the current session via a
+                                    // best-effort .say(""). End-session
+                                    // wiring lands in a follow-up
+                                    // touching CodingAgentManager
+                                    // directly.
+                                    let _ = agent.say_to_current("(user requested stop)", true).await;
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+                }
+
+                // Settings page save → soft restart of inbound.
+                // Agent-type / working-directory changes still need
+                // an app restart (the manager is constructed once).
+                {
+                    let sup = supervisor.clone();
+                    handle.listen("settings-changed", move |_ev| {
+                        let sup = sup.clone();
+                        tauri::async_runtime::spawn(async move {
+                            sup.reload().await;
+                        });
                     });
                 }
                 Ok(())
