@@ -13,11 +13,12 @@
 //! `gateway_start`-equivalent (i.e. once Tauri's `RunEvent::Ready`
 //! fires) and tears it down on exit.
 
+pub mod agent_runner;
 pub mod approval_router;
 pub mod commands;
 pub mod inbound;
 pub mod outbound;
-pub mod agent_runner;
+pub mod runtime;
 pub mod settings;
 pub mod state;
 pub mod tray;
@@ -46,6 +47,10 @@ pub fn run() {
     let shared = AppState::new_shared();
     let settings = Arc::new(RwLock::new(Settings::default()));
     let agent_manager = Arc::new(LrManagerHandle::new());
+    let agent = Arc::new(AgentRunner::new(
+        settings.read().working_directory.clone(),
+        agent_manager.clone(),
+    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -53,18 +58,33 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(shared.clone())
         .manage(settings.clone())
-        .manage::<Arc<AgentRunner>>(Arc::new(AgentRunner::new(
-            settings.read().working_directory.clone(),
-            agent_manager.clone(),
-        )))
-        .setup(move |app| {
-            tray::build(&app.handle())?;
-            tray::set_variant(&app.handle(), tray::TrayVariant::Disconnected);
-            // The window is `visible: false` in tauri.conf.json; we
-            // only show it on tray click. This keeps the dock icon
-            // out of the way on macOS once the user closes the
-            // window (it minimises to tray rather than quitting).
-            Ok(())
+        .manage::<Arc<AgentRunner>>(agent.clone())
+        .setup({
+            let shared = shared.clone();
+            let settings = settings.clone();
+            let agent = agent.clone();
+            move |app| {
+                let handle = app.handle().clone();
+                tray::build(&handle)?;
+                tray::set_variant(&handle, tray::TrayVariant::Disconnected);
+                // The window is `visible: false` in tauri.conf.json;
+                // we only show it on tray click. This keeps the dock
+                // icon out of the way on macOS once the user closes
+                // the window (it minimises to tray rather than
+                // quitting).
+                //
+                // Kick off the inbound runtime if the user has an
+                // apiKey configured. Otherwise the Status page shows
+                // "Paused" until they save Settings.
+                let s = settings.read().clone();
+                if s.is_configured() {
+                    tauri::async_runtime::spawn(async move {
+                        let (rx, _shutdowns) = inbound::start(&s).await;
+                        runtime::spawn(handle, rx, shared, settings, agent);
+                    });
+                }
+                Ok(())
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
