@@ -105,6 +105,7 @@ impl Supervisor {
             g.agent.clone()
         };
         tray::set_variant(&self.app, variant_for(&next, &agent_now));
+        tray::refresh_labels(&self.app, &next, &agent_now);
         let snap = self.shared.read().snapshot();
         let _ = self.app.emit("snapshot", snap);
     }

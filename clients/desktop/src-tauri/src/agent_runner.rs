@@ -57,6 +57,7 @@ pub trait ManagerHandle: Send + Sync {
         message: &str,
         interrupt: bool,
     ) -> Result<(), String>;
+    async fn end_session(&self, session_id: &str) -> Result<(), String>;
     async fn resolve_tool_approval(&self, approval_id: &str, approved: bool);
     async fn resolve_question(&self, approval_id: &str, answer: String);
 }
@@ -64,14 +65,17 @@ pub trait ManagerHandle: Send + Sync {
 /// Façade over the real manager.
 pub struct AgentRunner {
     link: Arc<Mutex<SessionLink>>,
-    pub working_directory: PathBuf,
+    settings: Arc<parking_lot::RwLock<Settings>>,
     pub manager: Arc<dyn ManagerHandle>,
 }
 
 impl AgentRunner {
-    pub fn new(working_directory: PathBuf, manager: Arc<dyn ManagerHandle>) -> Self {
+    pub fn new(
+        settings: Arc<parking_lot::RwLock<Settings>>,
+        manager: Arc<dyn ManagerHandle>,
+    ) -> Self {
         Self::new_with_link(
-            working_directory,
+            settings,
             manager,
             Arc::new(Mutex::new(SessionLink::default())),
         )
@@ -81,13 +85,13 @@ impl AgentRunner {
     /// `SessionLink`. Used in `lib.rs::setup` so the status watcher
     /// and the `AgentRunner` share the same link Arc.
     pub fn new_with_link(
-        working_directory: PathBuf,
+        settings: Arc<parking_lot::RwLock<Settings>>,
         manager: Arc<dyn ManagerHandle>,
         link: Arc<Mutex<SessionLink>>,
     ) -> Self {
         Self {
             link,
-            working_directory,
+            settings,
             manager,
         }
     }
@@ -96,10 +100,17 @@ impl AgentRunner {
         self.link.clone()
     }
 
+    /// Resolves the current working directory from settings each
+    /// call so changes via the Settings page take effect on the next
+    /// inbound without an app restart.
+    pub fn working_directory(&self) -> PathBuf {
+        self.settings.read().working_directory.clone()
+    }
+
     pub async fn start_for(&self, inbound_id: &str, prompt: &str) -> Result<String, String> {
         let session_id = self
             .manager
-            .start_session(prompt, Some(self.working_directory.clone()))
+            .start_session(prompt, Some(self.working_directory()))
             .await?;
         let mut g = self.link.lock();
         g.current_session_id = Some(session_id.clone());
@@ -117,6 +128,26 @@ impl AgentRunner {
         self.manager.say(&sid, message, interrupt).await
     }
 
+    /// Stop the current session, if any. Hard-kills the agent
+    /// process via the manager's `end_session`. Idempotent — returns
+    /// Ok(()) if there is no active session.
+    pub async fn stop_current(&self) -> Result<(), String> {
+        let sid = self.link.lock().current_session_id.clone();
+        let Some(sid) = sid else {
+            return Ok(());
+        };
+        let res = self.manager.end_session(&sid).await;
+        // Clear the link regardless — even on error there is no
+        // recovery from the desktop's side; the manager either
+        // killed the process or it's already gone.
+        {
+            let mut g = self.link.lock();
+            g.current_session_id = None;
+            g.originating_inbound_id = None;
+        }
+        res
+    }
+
     pub async fn approve(&self, approval_id: &str, approved: bool) {
         self.manager.resolve_tool_approval(approval_id, approved).await;
     }
@@ -132,11 +163,27 @@ impl AgentRunner {
 
 /// Real `ManagerHandle` implementation backed by
 /// `lr_coding_agents::CodingAgentManager`.
+///
+/// `agent_type` and `permission_mode` are resolved from
+/// `settings_arc` on every call so the Settings page can swap them
+/// without rebuilding the manager. `approval_mode` is baked into the
+/// manager's `CodingAgentsConfig` at construction — changing that
+/// still requires an app restart (a follow-up could swap to
+/// `update_config` but the manager only exposes that with `&mut
+/// self`, which doesn't compose with `Arc`).
 pub struct LrManagerHandle {
     manager: Arc<CodingAgentManager>,
     approvals: Arc<AskPopupApprovalService>,
-    agent_type: CodingAgentType,
-    permission_mode: CodingPermissionMode,
+    settings_arc: Arc<parking_lot::RwLock<Settings>>,
+}
+
+impl LrManagerHandle {
+    fn agent_type(&self) -> CodingAgentType {
+        map_agent_type(self.settings_arc.read().agent_type)
+    }
+    fn permission_mode(&self) -> CodingPermissionMode {
+        map_permission_mode(self.settings_arc.read().permission_mode)
+    }
 }
 
 impl LrManagerHandle {
@@ -185,8 +232,7 @@ impl LrManagerHandle {
         let handle = Arc::new(Self {
             manager: manager.clone(),
             approvals,
-            agent_type: map_agent_type(settings.agent_type),
-            permission_mode: map_permission_mode(settings.permission_mode),
+            settings_arc: settings_arc.clone(),
         });
 
         // Spawn status watcher so the UI + tray reflect Running →
@@ -208,12 +254,12 @@ impl ManagerHandle for LrManagerHandle {
         let resp = self
             .manager
             .start_session(
-                self.agent_type,
+                self.agent_type(),
                 CLIENT_ID,
                 prompt,
                 working_directory,
                 None, // model override — let lr-coding-agents default
-                Some(self.permission_mode),
+                Some(self.permission_mode()),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -232,11 +278,18 @@ impl ManagerHandle for LrManagerHandle {
                 CLIENT_ID,
                 Some(message),
                 interrupt,
-                Some(self.permission_mode),
+                Some(self.permission_mode()),
             )
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    async fn end_session(&self, session_id: &str) -> Result<(), String> {
+        self.manager
+            .end_session(session_id)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn resolve_tool_approval(&self, approval_id: &str, approved: bool) {
@@ -328,6 +381,7 @@ fn apply_agent_transition(app: &AppHandle, state: &SharedState, next: AgentStatu
         (g.connection.clone(), g.agent.clone())
     };
     tray::set_variant(app, variant_for(&conn, &agent));
+    tray::refresh_labels(app, &conn, &agent);
     let snap = state.read().snapshot();
     let _ = app.emit("snapshot", snap);
 }

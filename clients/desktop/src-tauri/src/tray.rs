@@ -6,6 +6,14 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::state::{AgentStatus, ConnectionStatus};
 
+/// Dynamic menu items the rest of the app updates when state
+/// transitions. Stored in Tauri's `manage` so [`refresh_labels`] can
+/// pick them up without re-building the entire tray.
+pub struct DynamicMenuItems {
+    pub toggle_agent: MenuItem<Wry>,
+    pub toggle_inbound: MenuItem<Wry>,
+}
+
 /// Tray icon variants. The PNG files live in `src-tauri/icons/`.
 #[derive(Debug, Clone, Copy)]
 pub enum TrayVariant {
@@ -46,9 +54,12 @@ pub fn variant_for(conn: &ConnectionStatus, agent: &AgentStatus) -> TrayVariant 
 
 /// Build the initial tray (idle variant) and wire menu / left-click
 /// behaviour. Returns the tray handle so callers can swap the icon
-/// later via [`set_variant`].
+/// later via [`set_variant`]. The dynamic menu items are stashed in
+/// `app.manage(DynamicMenuItems)` for later updates by
+/// [`refresh_labels`].
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app)?;
+    let (menu, dynamic) = build_menu(app)?;
+    app.manage(dynamic);
     let _tray = TrayIconBuilder::with_id("main")
         .tooltip("Vocal Cord")
         .menu(&menu)
@@ -66,6 +77,36 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+/// Update the dynamic menu items' labels + enabled state to reflect
+/// the current connection + agent status. No-op if the tray hasn't
+/// been built yet.
+pub fn refresh_labels(app: &AppHandle, conn: &ConnectionStatus, agent: &AgentStatus) {
+    let Some(items) = app.try_state::<DynamicMenuItems>() else {
+        return;
+    };
+    let (agent_label, agent_enabled) = match agent {
+        AgentStatus::Stopped => ("Stop agent (idle)", false),
+        AgentStatus::Running { .. } => ("Stop agent", true),
+        AgentStatus::WaitingForApproval { .. } | AgentStatus::WaitingForAnswer { .. } => {
+            ("Stop agent", true)
+        }
+        AgentStatus::Error { .. } => ("Stop agent (idle)", false),
+    };
+    if let Err(e) = items.toggle_agent.set_text(agent_label) {
+        tracing::warn!(error = %e, "tray set_text toggle-agent");
+    }
+    if let Err(e) = items.toggle_agent.set_enabled(agent_enabled) {
+        tracing::warn!(error = %e, "tray set_enabled toggle-agent");
+    }
+    let inbound_label = match conn {
+        ConnectionStatus::Paused => "Resume inbound",
+        ConnectionStatus::Connected | ConnectionStatus::Reconnecting => "Pause inbound",
+    };
+    if let Err(e) = items.toggle_inbound.set_text(inbound_label) {
+        tracing::warn!(error = %e, "tray set_text toggle-inbound");
+    }
 }
 
 /// Switch the running tray icon to the variant matching current status.
@@ -95,11 +136,17 @@ pub fn set_variant(app: &AppHandle, variant: TrayVariant) {
     }
 }
 
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, DynamicMenuItems)> {
     let show = MenuItem::with_id(app, "show", "Show Vocal Cord", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let start_stop = MenuItem::with_id(app, "toggle-agent", "Stop agent", true, None::<&str>)?;
+    let toggle_agent = MenuItem::with_id(
+        app,
+        "toggle-agent",
+        "Stop agent (idle)",
+        false,
+        None::<&str>,
+    )?;
     let toggle_inbound = MenuItem::with_id(
         app,
         "toggle-inbound",
@@ -115,13 +162,17 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &show,
             &settings,
             &sep1,
-            &start_stop,
+            &toggle_agent,
             &toggle_inbound,
             &sep2,
             &quit,
         ],
     )?;
-    Ok(menu)
+    let dynamic = DynamicMenuItems {
+        toggle_agent,
+        toggle_inbound,
+    };
+    Ok((menu, dynamic))
 }
 
 fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {

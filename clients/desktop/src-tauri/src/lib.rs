@@ -66,6 +66,10 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tray::build(&handle)?;
                 tray::set_variant(&handle, tray::TrayVariant::Disconnected);
+                {
+                    let g = shared.read();
+                    tray::refresh_labels(&handle, &g.connection, &g.agent);
+                }
 
                 // Reload persisted settings now that the store
                 // plugin is up.
@@ -96,8 +100,9 @@ pub fn run() {
                     settings.clone(),
                     link.clone(),
                 );
+                let _ = s; // settings already snapshotted into manager.build above
                 let agent = Arc::new(AgentRunner::new_with_link(
-                    s.working_directory.clone(),
+                    settings.clone(),
                     manager,
                     link,
                 ));
@@ -143,13 +148,9 @@ pub fn run() {
                                     }
                                 }
                                 "toggle-agent" => {
-                                    // For now this just interrupts
-                                    // the current session via a
-                                    // best-effort .say(""). End-session
-                                    // wiring lands in a follow-up
-                                    // touching CodingAgentManager
-                                    // directly.
-                                    let _ = agent.say_to_current("(user requested stop)", true).await;
+                                    if let Err(e) = agent.stop_current().await {
+                                        tracing::warn!(error = %e, "stop_current failed");
+                                    }
                                 }
                                 _ => {}
                             }

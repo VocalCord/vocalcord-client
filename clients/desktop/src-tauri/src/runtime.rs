@@ -60,6 +60,7 @@ fn transition_connection(app: &AppHandle, state: &SharedState, next: ConnectionS
         (g.connection.clone(), g.agent.clone())
     };
     tray::set_variant(app, variant_for(&conn, &agent));
+    tray::refresh_labels(app, &conn, &agent);
     emit_snapshot(app, state);
 }
 
@@ -161,6 +162,7 @@ fn transition_agent(app: &AppHandle, state: &SharedState, next: AgentStatus) {
         (g.connection.clone(), g.agent.clone())
     };
     tray::set_variant(app, variant_for(&conn, &agent));
+    tray::refresh_labels(app, &conn, &agent);
     emit_snapshot(app, state);
 }
 
